@@ -4,11 +4,11 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-# Use synchronous QdrantClient
+# FIX 1: Use synchronous QdrantClient (standard client)
 from qdrant_client import QdrantClient, models 
 from openai import OpenAI
 import uvicorn
-# Import threadpool utility to safely run synchronous Qdrant code
+# FIX 2: Import the threadpool utility to safely run synchronous Qdrant code in async FastAPI
 from starlette.concurrency import run_in_threadpool 
 
 # Load environment variables from .env file
@@ -45,7 +45,7 @@ try:
 except KeyError as e:
     raise RuntimeError(f"Environment variable {e} not set. Check your .env file.") from e
 
-# Initialize the synchronous QdrantClient 
+# FIX 3: Initialize the synchronous QdrantClient 
 qdrant_client = QdrantClient( 
     url=qdrant_url,
     api_key=qdrant_api_key,
@@ -72,8 +72,8 @@ async def rag_chat(request: QueryRequest):
         )
         query_vector = embedding_response.data[0].embedding
 
-        # 2. Search Qdrant using query_points (Robust Fix)
-        # We use run_in_threadpool to make this non-blocking
+        # 2. Search for the top 4 most relevant chunks in Qdrant
+        # FIX 4: Use query_points instead of search, and run in threadpool
         search_response = await run_in_threadpool(
             qdrant_client.query_points,
             collection_name=QDRANT_COLLECTION_NAME,
@@ -82,18 +82,19 @@ async def rag_chat(request: QueryRequest):
             with_payload=True,
         )
         
-        # Extract points from the response object
-        search_results = search_response.points
+        # Extract points (hits) from the response
+        # Note: query_points returns an object with a 'points' attribute list
+        search_hits = search_response.points
 
         # Extract the text from the search results
-        context_chunks = [result.payload.get("text") for result in search_results if result.payload]
+        context_chunks = [hit.payload.get("text") for hit in search_hits if hit.payload]
         
         if not context_chunks:
             return AnswerResponse(answer="I can only answer questions using the contents of The Spec-Driven AI Engineer book.")
 
         combined_context = "\n\n---\n\n".join(context_chunks)
 
-        # 3. Construct the system prompt (Grounding the LLM)
+        # 3. Construct the system prompt
         system_prompt = (
             "Answer the user's question based ONLY on the provided context. "
             "If the context does not contain the answer, politely state, "
@@ -151,4 +152,5 @@ async def selective_context_chat(request: SelectiveQueryRequest):
 
 # To run the app, use the command: uvicorn api_server:app --reload
 if __name__ == "__main__":
+    # Running directly via Python uses this block
     uvicorn.run(app, host="0.0.0.0", port=8000)
